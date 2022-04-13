@@ -2,14 +2,15 @@ package io.odpf.firehose.filter.jexl;
 
 import io.odpf.firehose.config.FilterConfig;
 import io.odpf.firehose.config.enums.FilterDataSourceType;
-import io.odpf.firehose.message.Message;
 import io.odpf.firehose.consumer.TestBookingLogKey;
 import io.odpf.firehose.consumer.TestBookingLogMessage;
 import io.odpf.firehose.consumer.TestKey;
 import io.odpf.firehose.consumer.TestMessage;
+import io.odpf.firehose.consumer.TestNestedRepeatedMessage;
 import io.odpf.firehose.filter.Filter;
 import io.odpf.firehose.filter.FilterException;
 import io.odpf.firehose.filter.FilteredMessages;
+import io.odpf.firehose.message.Message;
 import io.odpf.firehose.metrics.Instrumentation;
 import org.aeonbits.owner.ConfigFactory;
 import org.junit.Before;
@@ -20,7 +21,10 @@ import org.mockito.MockitoAnnotations;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.junit.Assert.assertEquals;
 
@@ -29,6 +33,8 @@ public class JexlFilterTest {
     private Filter filter;
     private TestMessage testMessage;
     private TestKey key;
+    private TestNestedRepeatedMessage repeatedTestMessage;
+    private TestKey keyForNestedRepeatedMessage;
 
     @Mock
     private Instrumentation instrumentation;
@@ -44,11 +50,38 @@ public class JexlFilterTest {
 
         key = TestKey.newBuilder().setOrderNumber("123").setOrderUrl("abc").build();
         testMessage = TestMessage.newBuilder().setOrderNumber("123").setOrderUrl("abc").setOrderDetails("details").build();
+
+        TestMessage message1 = TestMessage.newBuilder().setOrderNumber("123").setOrderUrl("abc").setOrderDetails("details").build();
+        TestMessage message2 = TestMessage.newBuilder().setOrderNumber("986").setOrderUrl("xyz").setOrderDetails("nothing").build();
+        keyForNestedRepeatedMessage = TestKey.newBuilder().setOrderNumber("374245623434").setOrderUrl("hsfgsfgs").build();
+        List<TestMessage> messageList = Stream.of(message1, message2).collect(Collectors.toList());
+        repeatedTestMessage = TestNestedRepeatedMessage.newBuilder()
+                .addAllRepeatedMessage(messageList)
+                .setNumberField(7)
+                .build();
     }
 
     @Test
     public void shouldFilterEsbMessages() throws FilterException {
         Message message = new Message(key.toByteArray(), this.testMessage.toByteArray(), "topic1", 0, 100);
+        filter = new JexlFilter(kafkaConsumerConfig, instrumentation);
+        FilteredMessages filteredMessages = filter.filter(Arrays.asList(message));
+        FilteredMessages expectedMessages = new FilteredMessages();
+        expectedMessages.addToValidMessages(message);
+        assertEquals(expectedMessages, filteredMessages);
+    }
+
+    @Test
+    public void shouldFilterEsbMessagesBasedOnRepeatedField() throws FilterException {
+        Message message = new Message(keyForNestedRepeatedMessage.toByteArray(), repeatedTestMessage.toByteArray(), "topic1", 0, 100);
+        String expression = "{for (message : testNestedRepeatedMessage.getRepeatedMessageList()) {if (message.getOrderNumber() == 986) { return true; } } return false; }";
+
+        Map<String, String> filterConfigs = new HashMap<>();
+        filterConfigs.put("FILTER_DATA_SOURCE", "message");
+        filterConfigs.put("FILTER_JEXL_EXPRESSION", expression);
+        filterConfigs.put("FILTER_SCHEMA_PROTO_CLASS", TestNestedRepeatedMessage.class.getName());
+        kafkaConsumerConfig = ConfigFactory.create(FilterConfig.class, filterConfigs);
+
         filter = new JexlFilter(kafkaConsumerConfig, instrumentation);
         FilteredMessages filteredMessages = filter.filter(Arrays.asList(message));
         FilteredMessages expectedMessages = new FilteredMessages();
